@@ -30,8 +30,8 @@ object OpenXmlHtmlEngine {
 
                 val fullHtml = buildHtmlDocument(
                     title = file.name,
-                    bodyContent = bodyHtml,
-                    customCss = DOCX_CSS
+                    bodyContent = "<div class=\"docx-canvas\"><div class=\"docx-page\">$bodyHtml</div></div>",
+                    customCss = DOCX_PAGE_CSS
                 )
                 Result.success(fullHtml)
             }
@@ -173,8 +173,8 @@ object OpenXmlHtmlEngine {
     }
 
     /**
-     * Parses DOCX XML with full rich text styles:
-     * bold, italic, underline, strike, text color, highlight, font size, sub/sup, bullet lists, tables and images.
+     * Parses DOCX XML with realistic A4 page layout, natural integrated tables, and rich text typography:
+     * bold, italic, underline, strike, text color, highlight, font size, sub/sup, bullet lists, page breaks.
      */
     private fun parseDocxXml(
         stream: InputStream,
@@ -208,6 +208,9 @@ object OpenXmlHtmlEngine {
         var headingLevel = 1
         var isBulletList = false
         var paragraphAlign: String? = null
+        var paragraphIndentPx: Int? = null
+        var paragraphSpacingBeforePt: Int? = null
+        var paragraphSpacingAfterPt: Int? = null
 
         val currentParagraphText = StringBuilder()
         val currentCellContent = StringBuilder()
@@ -254,7 +257,7 @@ object OpenXmlHtmlEngine {
                                     val pct = (w / 50.0).roundToInt()
                                     "width: $pct%;"
                                 } else {
-                                    val px = (w / 15).coerceAtLeast(30)
+                                    val px = (w / 15).coerceAtLeast(25)
                                     "width: ${px}px; min-width: ${px}px;"
                                 }
                             }
@@ -291,6 +294,9 @@ object OpenXmlHtmlEngine {
                             isHeading = false
                             isBulletList = false
                             paragraphAlign = null
+                            paragraphIndentPx = null
+                            paragraphSpacingBeforePt = null
+                            paragraphSpacingAfterPt = null
                         }
                         "pStyle" -> {
                             val styleVal = getAttributeAny(parser, "val", "w:val") ?: ""
@@ -300,6 +306,22 @@ object OpenXmlHtmlEngine {
                                 headingLevel = levelChar?.digitToIntOrNull()?.coerceIn(1, 4) ?: 1
                             } else if (styleVal.contains("List", ignoreCase = true) || styleVal.contains("Bullet", ignoreCase = true)) {
                                 isBulletList = true
+                            }
+                        }
+                        "ind" -> {
+                            val firstLine = getAttributeAny(parser, "firstLine", "w:firstLine")?.toIntOrNull()
+                            if (firstLine != null && firstLine > 0) {
+                                paragraphIndentPx = (firstLine / 15).coerceIn(12, 60)
+                            }
+                        }
+                        "spacing" -> {
+                            val before = getAttributeAny(parser, "before", "w:before")?.toIntOrNull()
+                            val after = getAttributeAny(parser, "after", "w:after")?.toIntOrNull()
+                            if (before != null && before > 0) {
+                                paragraphSpacingBeforePt = (before / 20).coerceIn(2, 36)
+                            }
+                            if (after != null && after > 0) {
+                                paragraphSpacingAfterPt = (after / 20).coerceIn(2, 36)
                             }
                         }
                         "numPr" -> {
@@ -371,7 +393,24 @@ object OpenXmlHtmlEngine {
                             }
                         }
                         "br", "cr" -> {
-                            currentParagraphText.append("<br/>")
+                            val brType = getAttributeAny(parser, "type", "w:type")?.lowercase()
+                            if (brType == "page") {
+                                // A4 Page Break!
+                                if (inParagraph && currentParagraphText.isNotEmpty()) {
+                                    sb.append("<p>$currentParagraphText</p>")
+                                    currentParagraphText.clear()
+                                }
+                                sb.append("</div><div class=\"docx-page\">")
+                            } else {
+                                currentParagraphText.append("<br/>")
+                            }
+                        }
+                        "lastRenderedPageBreak" -> {
+                            if (inParagraph && currentParagraphText.isNotEmpty()) {
+                                sb.append("<p>$currentParagraphText</p>")
+                                currentParagraphText.clear()
+                            }
+                            sb.append("</div><div class=\"docx-page\">")
                         }
                         "blip", "imagedata" -> {
                             val embedId = getAttributeAny(parser, "embed", "r:embed", "id", "r:id", "href", "r:link")
@@ -406,7 +445,7 @@ object OpenXmlHtmlEngine {
                                     val cg = StringBuilder("<colgroup>")
                                     for (w in currentGridColWidths) {
                                         val pct = ((w / total) * 100.0).roundToInt()
-                                        val minPx = (w / 15).coerceAtLeast(30)
+                                        val minPx = (w / 15).coerceAtLeast(25)
                                         cg.append("<col style=\"width: $pct%; min-width: ${minPx}px;\" />")
                                     }
                                     cg.append("</colgroup>")
@@ -446,8 +485,13 @@ object OpenXmlHtmlEngine {
                         "p" -> {
                             inParagraph = false
                             val text = currentParagraphText.toString()
-                            val alignStyle = if (paragraphAlign != null) "text-align: $paragraphAlign;" else ""
-                            val styleStr = if (alignStyle.isNotEmpty()) " style=\"$alignStyle\"" else ""
+                            val styleRules = StringBuilder()
+                            if (paragraphAlign != null) styleRules.append("text-align: $paragraphAlign; ")
+                            if (paragraphIndentPx != null) styleRules.append("text-indent: ${paragraphIndentPx}px; ")
+                            if (paragraphSpacingBeforePt != null) styleRules.append("margin-top: ${paragraphSpacingBeforePt}pt; ")
+                            if (paragraphSpacingAfterPt != null) styleRules.append("margin-bottom: ${paragraphSpacingAfterPt}pt; ")
+
+                            val styleStr = if (styleRules.isNotEmpty()) " style=\"$styleRules\"" else ""
 
                             if (text.isNotBlank() || text.contains("<img") || text.contains("<br")) {
                                 val pHtml = if (isHeading) {
@@ -748,9 +792,7 @@ object OpenXmlHtmlEngine {
                 </style>
             </head>
             <body>
-                <div class="content-wrapper">
-                    $bodyContent
-                </div>
+                $bodyContent
             </body>
             </html>
         """.trimIndent()
@@ -764,70 +806,59 @@ object OpenXmlHtmlEngine {
         body {
             margin: 0;
             padding: 12px;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            font-size: 15px;
-            line-height: 1.6;
-            color: #1c1b1f;
-            background-color: #f8f9fa;
-        }
-        .content-wrapper {
-            max-width: 900px;
-            margin: 0 auto;
-            background: #ffffff;
-            padding: 24px 20px;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-            word-wrap: break-word;
-            overflow-wrap: break-word;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Calibri", "Carlito", "Liberation Sans", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 14.5px;
+            line-height: 1.35;
+            color: #1a1a1a;
+            background-color: #e9ecef;
+            -webkit-font-smoothing: antialiased;
         }
         h1, h2, h3, h4, h5, h6 {
-            color: #1a1a24;
+            color: #111827;
             font-weight: 700;
-            margin-top: 1.4em;
-            margin-bottom: 0.6em;
-            line-height: 1.3;
+            margin-top: 1.2em;
+            margin-bottom: 0.4em;
+            line-height: 1.25;
         }
-        h1 { font-size: 1.65em; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px; }
-        h2 { font-size: 1.4em; }
-        h3 { font-size: 1.2em; }
+        h1 { font-size: 1.6em; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }
+        h2 { font-size: 1.35em; }
+        h3 { font-size: 1.15em; }
         h4 { font-size: 1.05em; }
         p {
-            margin: 0 0 10px 0;
+            margin: 0 0 6px 0;
+            line-height: 1.25;
         }
         .empty-p {
             height: 10px;
         }
         .doc-list-item {
-            margin: 4px 0 6px 16px;
-            line-height: 1.5;
+            margin: 3px 0 4px 18px;
+            line-height: 1.35;
         }
         .doc-bullet {
-            color: #2196F3;
+            color: #2563eb;
             font-weight: bold;
             margin-right: 6px;
         }
         .img-wrapper {
             text-align: center;
-            margin: 16px 0;
+            margin: 10px 0;
             width: 100%;
-            overflow-x: auto;
         }
         img {
             max-width: 100%;
             height: auto;
             display: inline-block;
-            border-radius: 6px;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+            border-radius: 2px;
         }
         .table-container {
             width: 100%;
             overflow-x: auto;
             -webkit-overflow-scrolling: touch;
-            margin: 16px 0;
-            border: 1px solid #d0d7de;
-            border-radius: 8px;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.04);
-            background: #ffffff;
+            margin: 12px 0;
+            border: none;
+            background: transparent;
+            box-shadow: none;
         }
         table.doc-table {
             border-collapse: collapse;
@@ -835,17 +866,18 @@ object OpenXmlHtmlEngine {
             min-width: 100%;
             table-layout: auto;
             margin: 0;
+            background: #ffffff;
+            font-size: 13px;
+            line-height: 1.35;
         }
         table.doc-table th, table.doc-table td {
-            border: 1px solid #d0d7de;
-            padding: 9px 12px;
+            border: 1px solid #b8bfc6;
+            padding: 6px 10px;
             text-align: left;
             vertical-align: top;
-            font-size: 13.5px;
-            line-height: 1.45;
             word-break: break-word;
             overflow-wrap: break-word;
-            min-width: 35px;
+            min-width: 25px;
         }
         table.doc-table th {
             background-color: #f1f4f8;
@@ -857,30 +889,57 @@ object OpenXmlHtmlEngine {
         }
     """
 
-    private const val DOCX_CSS = """
-        .content-wrapper {
-            border: 1px solid #eaeaea;
+    private const val DOCX_PAGE_CSS = """
+        body {
+            background-color: #e9ecf0;
+            padding: 16px 8px;
+        }
+        .docx-canvas {
+            width: 100%;
+            max-width: 820px;
+            margin: 0 auto;
+        }
+        .docx-page {
+            background-color: #ffffff;
+            width: 100%;
+            min-height: 1120px;
+            margin: 0 auto 20px auto;
+            padding: 56px 56px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04);
+            border: 1px solid #d4d8de;
+            border-radius: 2px;
+            box-sizing: border-box;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+        @media screen and (max-width: 600px) {
+            body {
+                padding: 8px 4px;
+            }
+            .docx-page {
+                padding: 28px 18px;
+                min-height: auto;
+                margin-bottom: 12px;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            }
         }
     """
 
     private const val PPTX_CSS = """
         body {
-            background-color: #eceff1;
+            background-color: #e5e9f0;
             padding: 12px;
         }
-        .content-wrapper {
-            background: transparent;
-            box-shadow: none;
-            padding: 0;
-        }
         .slide-card {
+            max-width: 880px;
+            margin: 0 auto 20px auto;
             background: #ffffff;
             border-radius: 12px;
             padding: 24px;
-            margin-bottom: 20px;
-            box-shadow: 0 3px 12px rgba(0,0,0,0.08);
-            border: 1px solid #dfe3e8;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+            border: 1px solid #d8dee9;
             position: relative;
+            box-sizing: border-box;
         }
         .slide-header {
             display: flex;
