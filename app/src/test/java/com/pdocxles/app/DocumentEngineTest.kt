@@ -6,6 +6,7 @@ import com.pdocxles.app.model.DocumentItem
 import com.pdocxles.app.model.DocumentType
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -243,5 +244,38 @@ class DocumentEngineTest {
         } finally {
             tempFile.delete()
         }
+    }
+
+    @Test
+    fun testBakGreenVoltDocx() = runBlocking {
+        val file = File("d:/Skalatskiy/Develop/Projects/Pdocxles/.BAK/Інструкція_на_портативну_зарядку_станцію_GreenVolt_new.docx")
+        if (file.exists()) {
+            val tempCacheDir = File(System.getProperty("java.io.tmpdir"), "test_docx_cache").apply { mkdirs() }
+            try {
+                val res = OpenXmlHtmlEngine.convertDocxToHtml(file, tempCacheDir)
+                if (res.isFailure) {
+                    val err = res.exceptionOrNull()
+                    err?.printStackTrace()
+                    throw err ?: Exception("Unknown error")
+                }
+                val html = res.getOrNull()!!
+                println("GreenVolt HTML length with disk cache: ${html.length}")
+                assertTrue("HTML should be compact and not contain 15MB base64 strings", html.length < 500_000)
+                assertTrue("Should contain file:// image references", html.contains("file://"))
+            } finally {
+                tempCacheDir.deleteRecursively()
+            }
+        }
+    }
+
+    @Test
+    fun testAppUpdateVersionComparison() {
+        val currentVer = com.pdocxles.app.update.AppUpdateManager.extractVersionNumbers("26.08.28_1530")
+        val newerVer = com.pdocxles.app.update.AppUpdateManager.extractVersionNumbers("Pdocxles_26.08.28_1632.apk")
+        val olderVer = com.pdocxles.app.update.AppUpdateManager.extractVersionNumbers("Pdocxles_26.08.27_1000.apk")
+
+        assertTrue(com.pdocxles.app.update.AppUpdateManager.isVersionNewer(newerVer, currentVer))
+        assertFalse(com.pdocxles.app.update.AppUpdateManager.isVersionNewer(olderVer, currentVer))
+        assertFalse(com.pdocxles.app.update.AppUpdateManager.isVersionNewer(currentVer, currentVer))
     }
 }

@@ -155,9 +155,47 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
                     android:lineSpacingExtra="3dp"
-                    android:text="• Pinch-to-Zoom: Smooth scaling from 1.0x up to 5.0x.\n• Pan / Drag: Navigate magnified pages and spreadsheets.\n• Double Tap: Quickly toggle between normal and magnified view.\n• Sheet Switcher: Tab bar at the bottom for multi-sheet Excel files."
+                    android:text="• Pinch-to-Zoom: Smooth scaling with two fingers from 1.0x up to 5.0x.\n• Pan / Drag: Navigate magnified pages and spreadsheets.\n• Sheet Switcher: Tab bar at the bottom for multi-sheet Excel files."
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
+            </LinearLayout>
+
+            <!-- Updates Card -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                android:background="@drawable/bg_card"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Software Updates"
+                    android:textColor="@color/text_primary"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:lineSpacingExtra="3dp"
+                    android:text="Pdocxles automatically checks for new releases on GitHub once every 24 hours."
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+
+                <Button
+                    android:id="@+id/btnCheckUpdate"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="12dp"
+                    android:backgroundTint="@color/primary"
+                    android:text="Check for Updates"
+                    android:textColor="@android:color/white"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
             </LinearLayout>
 
             <!-- Privacy Card -->

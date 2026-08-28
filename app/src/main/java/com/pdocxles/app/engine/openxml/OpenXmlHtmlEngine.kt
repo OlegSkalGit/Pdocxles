@@ -13,14 +13,17 @@ import kotlin.math.roundToInt
 
 object OpenXmlHtmlEngine {
 
-    suspend fun convertDocxToHtml(file: File): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun convertDocxToHtml(file: File, cacheDir: File? = null): Result<String> = withContext(Dispatchers.IO) {
         try {
             if (!file.exists() || file.length() == 0L) {
                 return@withContext Result.failure(IllegalArgumentException("DOCX file is empty or not found: ${file.absolutePath}"))
             }
 
             ZipFile(file).use { zip ->
-                val imagesMap = extractAllImages(zip)
+                val mediaDir = if (cacheDir != null) {
+                    File(cacheDir, "docx_media_${file.name.hashCode()}").apply { mkdirs() }
+                } else null
+                val imagesMap = extractAllImages(zip, mediaDir)
                 val relsMap = extractRelationships(zip, "word/_rels/document.xml.rels")
                 val docEntry = zip.getEntry("word/document.xml")
                     ?: return@withContext Result.failure(IllegalArgumentException("Invalid DOCX: missing word/document.xml"))
@@ -41,14 +44,17 @@ object OpenXmlHtmlEngine {
         }
     }
 
-    suspend fun convertPptxToHtml(file: File): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun convertPptxToHtml(file: File, cacheDir: File? = null): Result<String> = withContext(Dispatchers.IO) {
         try {
             if (!file.exists() || file.length() == 0L) {
                 return@withContext Result.failure(IllegalArgumentException("PPTX file is empty or not found: ${file.absolutePath}"))
             }
 
             ZipFile(file).use { zip ->
-                val imagesMap = extractAllImages(zip)
+                val mediaDir = if (cacheDir != null) {
+                    File(cacheDir, "pptx_media_${file.name.hashCode()}").apply { mkdirs() }
+                } else null
+                val imagesMap = extractAllImages(zip, mediaDir)
                 val themeColors = extractThemeColors(zip)
 
                 val slideEntries = zip.entries().asSequence()
@@ -158,8 +164,9 @@ object OpenXmlHtmlEngine {
 
     /**
      * Extracts all media files (PNG, JPG, GIF, WEBP, SVG, BMP) from archive and maps by filename and relative path.
+     * When mediaDir is provided, saves images to disk for optimal WebView memory performance.
      */
-    private fun extractAllImages(zip: ZipFile): Map<String, String> {
+    private fun extractAllImages(zip: ZipFile, mediaDir: File? = null): Map<String, String> {
         val map = mutableMapOf<String, String>()
         val entries = zip.entries()
         while (entries.hasMoreElements()) {
@@ -176,9 +183,21 @@ object OpenXmlHtmlEngine {
                     else -> "image/png"
                 }
                 try {
-                    val bytes = zip.getInputStream(entry).use { it.readBytes() }
-                    val base64 = encodeBase64(bytes)
-                    val dataUri = "data:$mime;base64,$base64"
+                    val dataUri = if (mediaDir != null) {
+                        val imgFile = File(mediaDir, filename)
+                        if (!imgFile.exists() || imgFile.length() == 0L) {
+                            zip.getInputStream(entry).use { input ->
+                                imgFile.outputStream().use { output ->
+                                    input.copyTo(output)
+                                }
+                            }
+                        }
+                        "file://${imgFile.absolutePath}"
+                    } else {
+                        val bytes = zip.getInputStream(entry).use { it.readBytes() }
+                        val base64 = encodeBase64(bytes)
+                        "data:$mime;base64,$base64"
+                    }
                     map[filename] = dataUri
                     map[entry.name] = dataUri
                     map["media/$filename"] = dataUri

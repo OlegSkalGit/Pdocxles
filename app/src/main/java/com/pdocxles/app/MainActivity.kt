@@ -94,6 +94,9 @@ class MainActivity : AppCompatActivity() {
 
         DocumentStorageManager.trimCache(this)
 
+        // Automatic update check (at most once every 24 hours)
+        com.pdocxles.app.update.AppUpdateManager.checkAndDownloadUpdate(this, force = false)
+
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (activeScreenType != ScreenType.FILE_MANAGER) {
@@ -484,8 +487,8 @@ class MainActivity : AppCompatActivity() {
             useWideViewPort = true
             loadWithOverviewMode = true
             javaScriptEnabled = false
-            allowFileAccess = false
-            allowContentAccess = false
+            allowFileAccess = true
+            allowContentAccess = true
             defaultTextEncodingName = "utf-8"
         }
 
@@ -495,16 +498,16 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             val result = if (isPptx) {
-                OpenXmlHtmlEngine.convertPptxToHtml(file)
+                OpenXmlHtmlEngine.convertPptxToHtml(file, cacheDir)
             } else {
-                OpenXmlHtmlEngine.convertDocxToHtml(file)
+                OpenXmlHtmlEngine.convertDocxToHtml(file, cacheDir)
             }
 
             officeProgressBar.visibility = View.GONE
             result.fold(
                 onSuccess = { html ->
                     webView.visibility = View.VISIBLE
-                    webView.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+                    webView.loadDataWithBaseURL("file://${cacheDir.absolutePath}/", html, "text/html", "utf-8", null)
                 },
                 onFailure = { error ->
                     officeErrorLayout.visibility = View.VISIBLE
@@ -526,7 +529,11 @@ class MainActivity : AppCompatActivity() {
         container.addView(view)
 
         val btnHelpBack: ImageButton = view.findViewById(R.id.btnHelpBack)
+        val btnCheckUpdate: Button? = view.findViewById(R.id.btnCheckUpdate)
         btnHelpBack.setOnClickListener { showFileManager() }
+        btnCheckUpdate?.setOnClickListener {
+            com.pdocxles.app.update.AppUpdateManager.performManualUpdateCheck(this)
+        }
     }
 
     private fun closeCurrentPdfEngine() {
