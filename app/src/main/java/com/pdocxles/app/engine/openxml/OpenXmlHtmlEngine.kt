@@ -473,21 +473,13 @@ object OpenXmlHtmlEngine {
                         "br", "cr" -> {
                             val brType = getAttributeAny(parser, "type", "w:type")?.lowercase()
                             if (brType == "page") {
-                                if (inParagraph && currentParagraphText.isNotEmpty()) {
-                                    sb.append("<p>$currentParagraphText</p>")
-                                    currentParagraphText.clear()
-                                }
-                                sb.append("</div><div class=\"docx-page\">")
+                                currentParagraphText.append("<div class=\"docx-page-break\"></div>")
                             } else {
                                 currentParagraphText.append("<br/>")
                             }
                         }
                         "lastRenderedPageBreak" -> {
-                            if (inParagraph && currentParagraphText.isNotEmpty()) {
-                                sb.append("<p>$currentParagraphText</p>")
-                                currentParagraphText.clear()
-                            }
-                            sb.append("</div><div class=\"docx-page\">")
+                            // Soft pagination marker: ignore to preserve document integrity
                         }
                         "blip", "imagedata" -> {
                             val embedId = getAttributeAny(parser, "embed", "r:embed", "id", "r:id", "href", "r:link")
@@ -1025,7 +1017,7 @@ object OpenXmlHtmlEngine {
         }
         .docx-canvas {
             width: 100%;
-            max-width: 820px;
+            max-width: 840px;
             margin: 0 auto;
         }
         .docx-page {
@@ -1041,12 +1033,30 @@ object OpenXmlHtmlEngine {
             word-wrap: break-word;
             overflow-wrap: break-word;
         }
+        .docx-page-break {
+            display: block;
+            height: 1px;
+            border-top: 1px dashed #cbd5e1;
+            margin: 24px 0;
+            position: relative;
+        }
+        .docx-page-break::after {
+            content: "PAGE BREAK";
+            position: absolute;
+            top: -8px;
+            right: 0;
+            font-size: 9.5px;
+            color: #94a3b8;
+            background: #ffffff;
+            padding: 0 6px;
+            letter-spacing: 0.5px;
+        }
         @media screen and (max-width: 600px) {
             body {
                 padding: 8px 4px;
             }
             .docx-page {
-                padding: 28px 18px;
+                padding: 24px 16px;
                 min-height: auto;
                 margin-bottom: 12px;
                 box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
