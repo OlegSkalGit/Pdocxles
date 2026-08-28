@@ -1,0 +1,27 @@
+# Auto-detect text files and normalize line endings
+* text=auto eol=lf
+
+# Windows batch files must always use CRLF line endings
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Shell scripts, Kotlin, Gradle, XML, properties, markdown and JSON files
+*.sh text eol=lf
+*.kt text eol=lf
+*.kts text eol=lf
+*.xml text eol=lf
+*.properties text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# Denote binary files to prevent Git from converting line endings
+*.png binary
+*.jpg binary
+*.ico binary
+*.jar binary
+*.apk binary
+
+.gitattributes export-ignore
+.gitignore export-ignore

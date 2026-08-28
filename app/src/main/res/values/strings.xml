@@ -1,0 +1,17 @@
+<resources>
+    <string name="app_name">Pdocxles</string>
+    <string name="search_placeholder">Search documents...</string>
+    <string name="open_file">Open File</string>
+    <string name="no_documents_found">No documents found</string>
+    <string name="no_documents_desc">Tap Open File to browse PDF, DOCX, XLSX, or PPTX documents</string>
+    <string name="no_search_matches">No matches found</string>
+    <string name="no_search_desc">Try searching with a different term</string>
+    <string name="filter_all">All</string>
+    <string name="filter_pdf">PDF</string>
+    <string name="filter_docx">DOCX</string>
+    <string name="filter_xlsx">XLSX</string>
+    <string name="filter_pptx">PPTX</string>
+    <string name="help_title">Help &amp; User Guide</string>
+    <string name="try_again">Try Again</string>
+    <string name="loading_document">Loading document...</string>
+</resources>

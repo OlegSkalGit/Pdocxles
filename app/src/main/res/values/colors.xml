@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#1E88E5</color>
+    <color name="primary_dark">#1565C0</color>
+    <color name="accent">#00ACC1</color>
+    
+    <color name="background">#F8F9FA</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="surface_variant">#F1F3F4</color>
+    <color name="card_border">#E0E0E0</color>
+    
+    <color name="text_primary">#1C1B1F</color>
+    <color name="text_secondary">#757575</color>
+    <color name="text_tertiary">#9E9E9E</color>
+    <color name="divider">#E0E0E0</color>
+
+    <!-- Document Brand Colors -->
+    <color name="pdf_red">#E53935</color>
+    <color name="word_blue">#1E88E5</color>
+    <color name="excel_green">#2E7D32</color>
+    <color name="pptx_orange">#E65100</color>
+    <color name="unknown_gray">#757575</color>
+</resources>

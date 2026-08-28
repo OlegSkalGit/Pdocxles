@@ -1,0 +1,30 @@
+# Gradle & Build Artifacts
+.gradle/
+build/
+app/build/
+*.apk
+*.ap_
+*.dex
+*.class
+
+# Downloaded Portable Toolchain
+.jdk17/
+.gradle87/
+
+# IDE & OS
+.idea/
+*.iml
+.DS_Store
+
+# Temporary & Log files
+.BAK/
+.venv/
+__pycache__/
+BAK/
+/example/
+setup/
+*.pyc
+.last_state.json
+*.log
+local.properties
+.agents/
