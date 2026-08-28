@@ -133,6 +133,14 @@ class DocumentEngineTest {
             assertEquals("150000", data.rows[0][1])
             assertEquals("Profit", data.rows[1][0])
             assertEquals("45000.5", data.rows[1][1])
+
+            val htmlRes = engine.convertSheetToHtml(0)
+            if (htmlRes.isFailure) throw htmlRes.exceptionOrNull()!!
+            val html = htmlRes.getOrNull()!!
+            assertTrue("Should contain table", html.contains("<table class=\"excel-table\">"))
+            assertTrue("Should contain column header A", html.contains("<th class=\"header-col\">A</th>"))
+            assertTrue("Should contain Revenue", html.contains("Revenue"))
+            assertTrue("Should contain numeric alignment for 150000", html.contains("text-align: right;"))
         } finally {
             tempFile.delete()
         }

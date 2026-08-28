@@ -15,8 +15,7 @@ class TouchZoomLayout @JvmOverloads constructor(
     defStyleAttr: Int = 0
 ) : FrameLayout(context, attrs, defStyleAttr),
     ScaleGestureDetector.OnScaleGestureListener,
-    GestureDetector.OnGestureListener,
-    GestureDetector.OnDoubleTapListener {
+    GestureDetector.OnGestureListener {
 
     private var scale = 1.0f
     private var posX = 0.0f
@@ -29,10 +28,10 @@ class TouchZoomLayout @JvmOverloads constructor(
     private val gestureDetector = GestureDetector(context, this)
 
     private val transformMatrix = Matrix()
-    private val matrixValues = FloatArray(9)
 
     init {
-        gestureDetector.setOnDoubleTapListener(this)
+        // Double-tap zoom explicitly disabled everywhere as requested
+        gestureDetector.setOnDoubleTapListener(null)
         setWillNotDraw(false)
     }
 
@@ -94,19 +93,6 @@ class TouchZoomLayout @JvmOverloads constructor(
         return false
     }
 
-    override fun onDoubleTap(e: MotionEvent): Boolean {
-        if (scale > 1.0f) {
-            scale = 1.0f
-            posX = 0f
-            posY = 0f
-        } else {
-            scale = 2.5f
-        }
-        clampPosition()
-        invalidate()
-        return true
-    }
-
     private fun clampPosition() {
         if (scale <= 1.0f) {
             posX = 0f
@@ -129,6 +115,4 @@ class TouchZoomLayout @JvmOverloads constructor(
         velocityX: Float,
         velocityY: Float
     ): Boolean = false
-    override fun onSingleTapConfirmed(e: MotionEvent): Boolean = false
-    override fun onDoubleTapEvent(e: MotionEvent): Boolean = false
 }

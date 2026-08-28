@@ -348,7 +348,7 @@ class MainActivity : AppCompatActivity() {
         val btnBack: ImageButton = view.findViewById(R.id.btnBack)
         val tvXlsxTitle: TextView = view.findViewById(R.id.tvXlsxTitle)
         val tvXlsxStats: TextView = view.findViewById(R.id.tvXlsxStats)
-        val tableLayout: TableLayout = view.findViewById(R.id.tableLayout)
+        val xlsxWebView: WebView = view.findViewById(R.id.xlsxWebView)
         val sheetTabsScroll: HorizontalScrollView = view.findViewById(R.id.sheetTabsScroll)
         val sheetTabsContainer: LinearLayout = view.findViewById(R.id.sheetTabsContainer)
         val xlsxProgressBar: ProgressBar = view.findViewById(R.id.xlsxProgressBar)
@@ -358,112 +358,36 @@ class MainActivity : AppCompatActivity() {
         btnBack.setOnClickListener { showFileManager() }
         tvXlsxTitle.text = file.name.replace(Regex("^\\d{10,14}_"), "")
 
+        xlsxWebView.webViewClient = WebViewClient()
+        xlsxWebView.settings.apply {
+            builtInZoomControls = true
+            displayZoomControls = false
+            useWideViewPort = true
+            loadWithOverviewMode = true
+            javaScriptEnabled = false
+            allowFileAccess = false
+            allowContentAccess = false
+            defaultTextEncodingName = "utf-8"
+        }
+
         val engine = FastExcelEngine(file)
         var sheets = listOf<SheetInfo>()
         var selectedSheetIdx = 0
 
-        fun populateTable(sheetData: SheetData) {
-            tableLayout.removeAllViews()
-            val rows = sheetData.rows
-            val cols = sheetData.maxColumns
-            tvXlsxStats.text = "${rows.size} rows • $cols columns"
-
-            val density = resources.displayMetrics.density
-            val cellPaddingH = (10 * density).toInt()
-            val cellPaddingV = (7 * density).toInt()
-            val rowNumWidth = (44 * density).toInt()
-            val minColWidth = (85 * density).toInt()
-            val maxColWidth = (260 * density).toInt()
-
-            // Dynamically calculate column widths based on content length
-            val colWidths = IntArray(cols) { minColWidth }
-            for (c in 0 until cols) {
-                var maxLen = getColumnLetter(c).length
-                val sampleRows = minOf(rows.size, 60)
-                for (r in 0 until sampleRows) {
-                    val len = rows[r].getOrElse(c) { "" }.length
-                    if (len > maxLen) maxLen = len
-                }
-                colWidths[c] = ((maxLen * 9f + 24) * density).toInt().coerceIn(minColWidth, maxColWidth)
-            }
-
-            // Header row (#, A, B, C...)
-            val headerRow = TableRow(this@MainActivity).apply {
-                setBackgroundColor(Color.parseColor("#E2E6EA"))
-            }
-
-            val cornerCell = TextView(this@MainActivity).apply {
-                text = "#"
-                typeface = Typeface.DEFAULT_BOLD
-                textSize = 11.5f
-                setTextColor(Color.DKGRAY)
-                gravity = Gravity.CENTER
-                setPadding(cellPaddingH, cellPaddingV, cellPaddingH, cellPaddingV)
-                width = rowNumWidth
-                setBackgroundColor(Color.parseColor("#D8DDE3"))
-            }
-            headerRow.addView(cornerCell)
-
-            for (c in 0 until cols) {
-                val colCell = TextView(this@MainActivity).apply {
-                    text = getColumnLetter(c)
-                    typeface = Typeface.DEFAULT_BOLD
-                    textSize = 12f
-                    setTextColor(Color.parseColor("#333333"))
-                    gravity = Gravity.CENTER
-                    setPadding(cellPaddingH, cellPaddingV, cellPaddingH, cellPaddingV)
-                    width = colWidths[c]
-                }
-                headerRow.addView(colCell)
-            }
-            tableLayout.addView(headerRow)
-
-            // Data rows
-            for (r in rows.indices) {
-                val rowData = rows[r]
-                val tr = TableRow(this@MainActivity).apply {
-                    setBackgroundColor(if (r % 2 == 0) Color.WHITE else Color.parseColor("#F9FAFB"))
-                }
-
-                val rowNumCell = TextView(this@MainActivity).apply {
-                    text = (r + 1).toString()
-                    textSize = 11.5f
-                    setTextColor(Color.GRAY)
-                    gravity = Gravity.CENTER
-                    setPadding(cellPaddingH, cellPaddingV, cellPaddingH, cellPaddingV)
-                    width = rowNumWidth
-                    setBackgroundColor(Color.parseColor("#EAECEF"))
-                }
-                tr.addView(rowNumCell)
-
-                for (c in 0 until cols) {
-                    val cellText = rowData.getOrElse(c) { "" }
-                    val dataCell = TextView(this@MainActivity).apply {
-                        text = cellText
-                        textSize = 13f
-                        setTextColor(Color.parseColor("#212529"))
-                        gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                        setPadding(cellPaddingH, cellPaddingV, cellPaddingH, cellPaddingV)
-                        width = colWidths[c]
-                        maxLines = 4
-                        ellipsize = android.text.TextUtils.TruncateAt.END
-                    }
-                    tr.addView(dataCell)
-                }
-                tableLayout.addView(tr)
-            }
-        }
-
         fun loadSheet(idx: Int) {
             xlsxProgressBar.visibility = View.VISIBLE
-            tableLayout.removeAllViews()
+            xlsxWebView.visibility = View.GONE
+            xlsxErrorLayout.visibility = View.GONE
 
             lifecycleScope.launch {
-                val res = engine.loadSheetData(idx)
+                val res = engine.convertSheetToHtml(idx)
                 xlsxProgressBar.visibility = View.GONE
                 res.fold(
-                    onSuccess = { data ->
-                        populateTable(data)
+                    onSuccess = { html ->
+                        xlsxWebView.visibility = View.VISIBLE
+                        xlsxWebView.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+                        val sheetName = sheets.getOrNull(idx)?.name ?: "Sheet ${idx + 1}"
+                        tvXlsxStats.text = "$sheetName • ${sheets.size} sheet(s)"
                     },
                     onFailure = { err ->
                         xlsxErrorLayout.visibility = View.VISIBLE
@@ -508,10 +432,10 @@ class MainActivity : AppCompatActivity() {
         xlsxProgressBar.visibility = View.VISIBLE
         lifecycleScope.launch {
             val listRes = engine.getSheetList()
-            xlsxProgressBar.visibility = View.GONE
             listRes.fold(
                 onSuccess = { sheetList ->
                     if (sheetList.isEmpty()) {
+                        xlsxProgressBar.visibility = View.GONE
                         xlsxErrorLayout.visibility = View.VISIBLE
                         tvXlsxErrorMsg.text = "No sheets found in workbook."
                     } else {
@@ -522,22 +446,12 @@ class MainActivity : AppCompatActivity() {
                     }
                 },
                 onFailure = { err ->
+                    xlsxProgressBar.visibility = View.GONE
                     xlsxErrorLayout.visibility = View.VISIBLE
                     tvXlsxErrorMsg.text = err.localizedMessage ?: "Failed to open Excel file"
                 }
             )
         }
-    }
-
-    private fun getColumnLetter(index: Int): String {
-        var num = index
-        val sb = StringBuilder()
-        while (num >= 0) {
-            val rem = num % 26
-            sb.insert(0, ('A'.code + rem).toChar())
-            num = num / 26 - 1
-        }
-        return sb.toString()
     }
 
     // ==========================================
