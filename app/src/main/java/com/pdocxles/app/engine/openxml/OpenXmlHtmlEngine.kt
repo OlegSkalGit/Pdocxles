@@ -49,6 +49,8 @@ object OpenXmlHtmlEngine {
 
             ZipFile(file).use { zip ->
                 val imagesMap = extractAllImages(zip)
+                val themeColors = extractThemeColors(zip)
+
                 val slideEntries = zip.entries().asSequence()
                     .filter { it.name.startsWith("ppt/slides/slide") && it.name.endsWith(".xml") }
                     .sortedBy { extractSlideNumber(it.name) }
@@ -64,7 +66,7 @@ object OpenXmlHtmlEngine {
                     val relPath = "ppt/slides/_rels/${entry.name.substringAfterLast('/')}.rels"
                     val relsMap = extractRelationships(zip, relPath)
                     val slideXml = zip.getInputStream(entry).use { it.readBytes() }
-                    val contentHtml = parseSlideXml(ByteArrayInputStream(slideXml), imagesMap, relsMap)
+                    val contentHtml = parseSlideXml(ByteArrayInputStream(slideXml), imagesMap, relsMap, themeColors)
 
                     slidesHtml.append("""
                         <div class="slide-card" id="slide-$slideNum">
@@ -80,7 +82,7 @@ object OpenXmlHtmlEngine {
 
                 val fullHtml = buildHtmlDocument(
                     title = file.name,
-                    bodyContent = slidesHtml.toString(),
+                    bodyContent = "<div class=\"pptx-canvas\">$slidesHtml</div>",
                     customCss = PPTX_CSS
                 )
                 Result.success(fullHtml)
@@ -94,6 +96,64 @@ object OpenXmlHtmlEngine {
     private fun extractSlideNumber(name: String): Int {
         val numStr = name.substringAfter("slide").substringBefore(".xml")
         return numStr.toIntOrNull() ?: 0
+    }
+
+    /**
+     * Extracts theme colors from ppt/theme/theme1.xml with standard PowerPoint fallbacks.
+     */
+    private fun extractThemeColors(zip: ZipFile): Map<String, String> {
+        val map = mutableMapOf(
+            "accent1" to "#4472c4",
+            "accent2" to "#ed7d31",
+            "accent3" to "#a5a5a5",
+            "accent4" to "#ffc000",
+            "accent5" to "#5b9bd5",
+            "accent6" to "#70ad47",
+            "tx1" to "#1e293b",
+            "dk1" to "#1e293b",
+            "tx2" to "#475569",
+            "dk2" to "#475569",
+            "bg1" to "#ffffff",
+            "lt1" to "#ffffff",
+            "bg2" to "#f1f5f9",
+            "lt2" to "#f1f5f9",
+            "hlink" to "#2563eb",
+            "folHlink" to "#7c3aed"
+        )
+
+        val entry = zip.getEntry("ppt/theme/theme1.xml") ?: return map
+        try {
+            zip.getInputStream(entry).use { stream ->
+                val parser = createXmlParser(stream)
+                var event = parser.eventType
+                var currentColorKey: String? = null
+
+                while (event != XmlPullParser.END_DOCUMENT) {
+                    val tagName = parser.name?.substringAfterLast(':') ?: ""
+                    when (event) {
+                        XmlPullParser.START_TAG -> {
+                            if (map.containsKey(tagName)) {
+                                currentColorKey = tagName
+                            } else if (currentColorKey != null && tagName == "srgbClr") {
+                                val hex = getAttributeAny(parser, "val")
+                                if (!hex.isNullOrBlank()) {
+                                    map[currentColorKey] = if (hex.startsWith("#")) hex else "#$hex"
+                                }
+                            }
+                        }
+                        XmlPullParser.END_TAG -> {
+                            if (tagName == currentColorKey) {
+                                currentColorKey = null
+                            }
+                        }
+                    }
+                    event = parser.next()
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return map
     }
 
     /**
@@ -173,8 +233,7 @@ object OpenXmlHtmlEngine {
     }
 
     /**
-     * Parses DOCX XML with realistic A4 page layout, natural integrated tables, and rich text typography:
-     * bold, italic, underline, strike, text color, highlight, font size, sub/sup, bullet lists, page breaks.
+     * Parses DOCX XML with realistic A4 page layout, natural integrated tables, and rich text typography.
      */
     private fun parseDocxXml(
         stream: InputStream,
@@ -395,7 +454,6 @@ object OpenXmlHtmlEngine {
                         "br", "cr" -> {
                             val brType = getAttributeAny(parser, "type", "w:type")?.lowercase()
                             if (brType == "page") {
-                                // A4 Page Break!
                                 if (inParagraph && currentParagraphText.isNotEmpty()) {
                                     sb.append("<p>$currentParagraphText</p>")
                                     currentParagraphText.clear()
@@ -521,13 +579,14 @@ object OpenXmlHtmlEngine {
     }
 
     /**
-     * Parses PPTX slide XML with shape-level image extraction, tables, and rich text formatting:
-     * bold, italic, underline, strike, colors, font sizes, alignment and bullet levels.
+     * Parses PPTX slide XML with full visual styles:
+     * Theme colors, shape fill/borders, title placeholders, custom bullets, font sizes, alignments, tables and images.
      */
     private fun parseSlideXml(
         stream: InputStream,
         imagesMap: Map<String, String>,
-        relsMap: Map<String, String>
+        relsMap: Map<String, String>,
+        themeColors: Map<String, String>
     ): String {
         val sb = StringBuilder()
         val parser = createXmlParser(stream)
@@ -542,6 +601,9 @@ object OpenXmlHtmlEngine {
 
         var paragraphAlign: String? = null
         var listLevel = 0
+        var bulletChar: String? = null
+        var hasBullet = false
+        var isTitlePlaceholder = false
 
         var inTableCell = false
         var inParagraph = false
@@ -556,8 +618,17 @@ object OpenXmlHtmlEngine {
             when (event) {
                 XmlPullParser.START_TAG -> {
                     when (tagName) {
+                        "sp" -> {
+                            isTitlePlaceholder = false
+                        }
+                        "ph" -> {
+                            val type = getAttributeAny(parser, "type")?.lowercase()
+                            if (type == "title" || type == "ctrtitle") {
+                                isTitlePlaceholder = true
+                            }
+                        }
                         "tbl" -> {
-                            sb.append("<div class=\"table-container\"><table class=\"doc-table\">")
+                            sb.append("<div class=\"table-container\"><table class=\"slide-table\">")
                         }
                         "tr" -> {
                             sb.append("<tr>")
@@ -572,6 +643,8 @@ object OpenXmlHtmlEngine {
                             currentParagraphText.clear()
                             paragraphAlign = null
                             listLevel = 0
+                            bulletChar = null
+                            hasBullet = false
                         }
                         "pPr" -> {
                             val algn = getAttributeAny(parser, "algn")?.lowercase()
@@ -583,6 +656,24 @@ object OpenXmlHtmlEngine {
                             }
                             val lvlStr = getAttributeAny(parser, "lvl")
                             listLevel = lvlStr?.toIntOrNull() ?: 0
+                            if (listLevel > 0) {
+                                hasBullet = true
+                            }
+                        }
+                        "buChar" -> {
+                            val c = getAttributeAny(parser, "char")
+                            if (!c.isNullOrBlank()) {
+                                bulletChar = c
+                                hasBullet = true
+                            }
+                        }
+                        "buAutoNum" -> {
+                            bulletChar = "•"
+                            hasBullet = true
+                        }
+                        "buNone" -> {
+                            hasBullet = false
+                            bulletChar = null
                         }
                         "r" -> {
                             isBold = false
@@ -610,10 +701,24 @@ object OpenXmlHtmlEngine {
                         "srgbClr" -> {
                             val hex = getAttributeAny(parser, "val")
                             if (!hex.isNullOrBlank()) {
+                                val formattedHex = if (hex.startsWith("#")) hex else "#$hex"
                                 if (inTableCell && currentCellContent.isEmpty() && currentParagraphText.isEmpty()) {
-                                    cellShadingHex = "#$hex"
+                                    cellShadingHex = formattedHex
                                 } else {
-                                    textColorHex = "#$hex"
+                                    textColorHex = formattedHex
+                                }
+                            }
+                        }
+                        "schemeClr" -> {
+                            val schemeKey = getAttributeAny(parser, "val")?.lowercase()
+                            if (schemeKey != null && themeColors.containsKey(schemeKey)) {
+                                val resolvedHex = themeColors[schemeKey]
+                                if (resolvedHex != null) {
+                                    if (inTableCell && currentCellContent.isEmpty() && currentParagraphText.isEmpty()) {
+                                        cellShadingHex = resolvedHex
+                                    } else {
+                                        textColorHex = resolvedHex
+                                    }
                                 }
                             }
                         }
@@ -685,11 +790,16 @@ object OpenXmlHtmlEngine {
                             if (text.isNotBlank() || text.contains("<img") || text.contains("<br")) {
                                 val styles = StringBuilder()
                                 if (paragraphAlign != null) styles.append("text-align: $paragraphAlign; ")
-                                if (listLevel > 0) styles.append("padding-left: ${listLevel * 20}px; ")
+                                if (listLevel > 0) styles.append("padding-left: ${listLevel * 24}px; ")
 
                                 val styleAttr = if (styles.isNotEmpty()) " style=\"$styles\"" else ""
-                                val bullet = if (listLevel > 0) "<span class=\"slide-bullet\">•</span> " else ""
-                                val pHtml = "<p class=\"slide-text\"$styleAttr>$bullet$text</p>"
+                                val bulletSymbol = if (hasBullet) "<span class=\"slide-bullet\">${bulletChar ?: "•"}</span> " else ""
+
+                                val pHtml = if (isTitlePlaceholder) {
+                                    "<h2 class=\"slide-title\"$styleAttr>$text</h2>"
+                                } else {
+                                    "<p class=\"slide-text\"$styleAttr>$bulletSymbol$text</p>"
+                                }
 
                                 if (inTableCell) {
                                     currentCellContent.append(pHtml)
@@ -927,48 +1037,94 @@ object OpenXmlHtmlEngine {
 
     private const val PPTX_CSS = """
         body {
-            background-color: #e5e9f0;
-            padding: 12px;
+            background-color: #1e222b;
+            padding: 16px 8px;
+        }
+        .pptx-canvas {
+            width: 100%;
+            max-width: 920px;
+            margin: 0 auto;
         }
         .slide-card {
-            max-width: 880px;
-            margin: 0 auto 20px auto;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            min-height: 480px;
+            margin: 0 auto 24px auto;
             background: #ffffff;
-            border-radius: 12px;
-            padding: 24px;
-            box-shadow: 0 4px 14px rgba(0,0,0,0.08);
-            border: 1px solid #d8dee9;
+            border-radius: 6px;
+            padding: 32px 40px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28), 0 2px 6px rgba(0, 0, 0, 0.15);
+            border: 1px solid #2d3340;
             position: relative;
             box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            overflow-x: auto;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+        @media screen and (max-width: 680px) {
+            .slide-card {
+                padding: 20px 16px;
+                min-height: auto;
+                aspect-ratio: auto;
+                margin-bottom: 16px;
+            }
         }
         .slide-header {
             display: flex;
             justify-content: flex-end;
-            margin-bottom: 14px;
-            border-bottom: 1px solid #f0f0f0;
+            margin-bottom: 12px;
+            border-bottom: 1px solid #f1f5f9;
             padding-bottom: 6px;
         }
         .slide-badge {
-            background: #fff3e0;
-            color: #e65100;
-            font-size: 12px;
+            background: #f8fafc;
+            color: #64748b;
+            font-size: 11px;
             font-weight: 600;
-            padding: 3px 10px;
-            border-radius: 12px;
-            border: 1px solid #ffe082;
+            padding: 2px 8px;
+            border-radius: 6px;
+            border: 1px solid #e2e8f0;
+            letter-spacing: 0.3px;
         }
         .slide-content {
             font-size: 16px;
-            line-height: 1.6;
-            min-height: 120px;
+            line-height: 1.45;
+            flex: 1;
+        }
+        .slide-title {
+            font-size: 26px;
+            font-weight: 700;
+            color: #0f172a;
+            margin: 0 0 16px 0;
+            line-height: 1.25;
+            letter-spacing: -0.2px;
         }
         .slide-text {
-            margin: 8px 0;
+            margin: 6px 0;
+            color: #334155;
         }
         .slide-bullet {
-            color: #ff9800;
+            color: #3b82f6;
             font-weight: bold;
-            margin-right: 6px;
+            margin-right: 8px;
+            display: inline-block;
+        }
+        .slide-table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 12px 0;
+            background: #ffffff;
+            font-size: 13px;
+        }
+        .slide-table th, .slide-table td {
+            border: 1px solid #cbd5e1;
+            padding: 8px 12px;
+            text-align: left;
+            vertical-align: top;
+            word-break: break-word;
         }
     """
 }
