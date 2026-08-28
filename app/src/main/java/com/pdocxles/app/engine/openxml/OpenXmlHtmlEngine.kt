@@ -1,6 +1,5 @@
 package com.pdocxles.app.engine.openxml
 
-import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.xmlpull.v1.XmlPullParser
@@ -97,6 +96,9 @@ object OpenXmlHtmlEngine {
         return numStr.toIntOrNull() ?: 0
     }
 
+    /**
+     * Extracts all media files (PNG, JPG, GIF, WEBP, SVG, BMP) from archive and maps by filename and relative path.
+     */
     private fun extractAllImages(zip: ZipFile): Map<String, String> {
         val map = mutableMapOf<String, String>()
         val entries = zip.entries()
@@ -115,7 +117,7 @@ object OpenXmlHtmlEngine {
                 }
                 try {
                     val bytes = zip.getInputStream(entry).use { it.readBytes() }
-                    val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    val base64 = encodeBase64(bytes)
                     val dataUri = "data:$mime;base64,$base64"
                     map[filename] = dataUri
                     map[entry.name] = dataUri
@@ -129,6 +131,17 @@ object OpenXmlHtmlEngine {
         return map
     }
 
+    private fun encodeBase64(bytes: ByteArray): String {
+        return try {
+            java.util.Base64.getEncoder().encodeToString(bytes)
+        } catch (e: Throwable) {
+            android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+        }
+    }
+
+    /**
+     * Extracts OpenXML relationship mappings (Id -> Target filename / path).
+     */
     private fun extractRelationships(zip: ZipFile, relsPath: String): Map<String, String> {
         val map = mutableMapOf<String, String>()
         val entry = zip.getEntry(relsPath) ?: return map
@@ -138,13 +151,16 @@ object OpenXmlHtmlEngine {
                 val parser = createXmlParser(stream)
                 var event = parser.eventType
                 while (event != XmlPullParser.END_DOCUMENT) {
-                    if (event == XmlPullParser.START_TAG && (parser.name == "Relationship" || parser.name?.endsWith(":Relationship") == true)) {
-                        val id = getAttributeAny(parser, "Id", "id")
-                        val target = getAttributeAny(parser, "Target", "target")
-                        if (id != null && target != null) {
-                            val filename = target.substringAfterLast('/')
-                            map[id] = filename
-                            map[id.lowercase()] = filename
+                    if (event == XmlPullParser.START_TAG) {
+                        val tagName = parser.name?.substringAfterLast(':') ?: ""
+                        if (tagName == "Relationship") {
+                            val id = getAttributeAny(parser, "Id", "id")
+                            val target = getAttributeAny(parser, "Target", "target")
+                            if (id != null && target != null) {
+                                val filename = target.substringAfterLast('/')
+                                map[id] = filename
+                                map[id.lowercase()] = filename
+                            }
                         }
                     }
                     event = parser.next()
@@ -156,6 +172,10 @@ object OpenXmlHtmlEngine {
         return map
     }
 
+    /**
+     * Parses DOCX XML with full rich text styles:
+     * bold, italic, underline, strike, text color, highlight, font size, sub/sup, bullet lists, tables and images.
+     */
     private fun parseDocxXml(
         stream: InputStream,
         imagesMap: Map<String, String>,
@@ -166,6 +186,7 @@ object OpenXmlHtmlEngine {
         var event = parser.eventType
 
         var inTableCell = false
+        var inParagraph = false
         var isHeaderRow = false
         var cellColSpan = 1
         var cellShadingHex: String? = null
@@ -178,8 +199,14 @@ object OpenXmlHtmlEngine {
         var isItalic = false
         var isUnderline = false
         var isStrike = false
+        var vertAlign: String? = null
+        var textColorHex: String? = null
+        var highlightColor: String? = null
+        var fontSizePt: Int? = null
+
         var isHeading = false
         var headingLevel = 1
+        var isBulletList = false
         var paragraphAlign: String? = null
 
         val currentParagraphText = StringBuilder()
@@ -259,8 +286,10 @@ object OpenXmlHtmlEngine {
                             }
                         }
                         "p" -> {
+                            inParagraph = true
                             currentParagraphText.clear()
                             isHeading = false
+                            isBulletList = false
                             paragraphAlign = null
                         }
                         "pStyle" -> {
@@ -269,23 +298,75 @@ object OpenXmlHtmlEngine {
                                 isHeading = true
                                 val levelChar = styleVal.lastOrNull { it.isDigit() }
                                 headingLevel = levelChar?.digitToIntOrNull()?.coerceIn(1, 4) ?: 1
+                            } else if (styleVal.contains("List", ignoreCase = true) || styleVal.contains("Bullet", ignoreCase = true)) {
+                                isBulletList = true
                             }
+                        }
+                        "numPr" -> {
+                            isBulletList = true
                         }
                         "r" -> {
                             isBold = false
                             isItalic = false
                             isUnderline = false
                             isStrike = false
+                            vertAlign = null
+                            textColorHex = null
+                            highlightColor = null
+                            fontSizePt = null
                         }
-                        "b" -> isBold = true
-                        "i" -> isItalic = true
-                        "u" -> isUnderline = true
-                        "strike" -> isStrike = true
+                        "b" -> {
+                            val v = getAttributeAny(parser, "val", "w:val")?.lowercase()
+                            isBold = v == null || v == "1" || v == "true" || v == "on"
+                        }
+                        "i" -> {
+                            val v = getAttributeAny(parser, "val", "w:val")?.lowercase()
+                            isItalic = v == null || v == "1" || v == "true" || v == "on"
+                        }
+                        "u" -> {
+                            val v = getAttributeAny(parser, "val", "w:val")?.lowercase()
+                            isUnderline = v != "none"
+                        }
+                        "strike", "dstrike" -> {
+                            val v = getAttributeAny(parser, "val", "w:val")?.lowercase()
+                            isStrike = v == null || v == "1" || v == "true" || v == "on"
+                        }
+                        "color" -> {
+                            val c = getAttributeAny(parser, "val", "w:val")
+                            if (!c.isNullOrBlank() && c != "auto") {
+                                textColorHex = if (c.startsWith("#")) c else "#$c"
+                            }
+                        }
+                        "highlight" -> {
+                            val h = getAttributeAny(parser, "val", "w:val")
+                            if (!h.isNullOrBlank() && h != "none") {
+                                highlightColor = h
+                            }
+                        }
+                        "sz" -> {
+                            val szHalfPt = getAttributeAny(parser, "val", "w:val")?.toIntOrNull()
+                            if (szHalfPt != null && szHalfPt > 0) {
+                                fontSizePt = szHalfPt / 2
+                            }
+                        }
+                        "vertAlign" -> {
+                            vertAlign = getAttributeAny(parser, "val", "w:val")?.lowercase()
+                        }
                         "t" -> {
                             val text = parser.nextText()
                             if (text.isNotEmpty()) {
                                 val escaped = escapeHtml(text)
-                                val styled = formatRun(escaped, isBold, isItalic, isUnderline, isStrike)
+                                val styled = formatRichRun(
+                                    text = escaped,
+                                    bold = isBold,
+                                    italic = isItalic,
+                                    underline = isUnderline,
+                                    strike = isStrike,
+                                    colorHex = textColorHex,
+                                    highlight = highlightColor,
+                                    fontSizePt = fontSizePt,
+                                    vertAlign = vertAlign
+                                )
                                 currentParagraphText.append(styled)
                             }
                         }
@@ -306,8 +387,10 @@ object OpenXmlHtmlEngine {
                                     val imgHtml = "<div class=\"img-wrapper\"><img src=\"$dataUri\" alt=\"Image\" /></div>"
                                     if (inTableCell) {
                                         currentCellContent.append(imgHtml)
-                                    } else {
+                                    } else if (inParagraph) {
                                         currentParagraphText.append(imgHtml)
+                                    } else {
+                                        sb.append(imgHtml)
                                     }
                                 }
                             }
@@ -358,16 +441,21 @@ object OpenXmlHtmlEngine {
                             val finalContent = if (content.isNotEmpty()) content else "&nbsp;"
 
                             sb.append("<$tag$spanStr$styleStr>$finalContent</$tag>")
+                            currentCellContent.clear()
                         }
                         "p" -> {
+                            inParagraph = false
                             val text = currentParagraphText.toString()
-                            val alignStyle = if (paragraphAlign != null) " style=\"text-align: $paragraphAlign;\"" else ""
+                            val alignStyle = if (paragraphAlign != null) "text-align: $paragraphAlign;" else ""
+                            val styleStr = if (alignStyle.isNotEmpty()) " style=\"$alignStyle\"" else ""
 
                             if (text.isNotBlank() || text.contains("<img") || text.contains("<br")) {
                                 val pHtml = if (isHeading) {
-                                    "<h$headingLevel$alignStyle>$text</h$headingLevel>"
+                                    "<h$headingLevel$styleStr>$text</h$headingLevel>"
+                                } else if (isBulletList) {
+                                    "<div class=\"doc-list-item\"$styleStr><span class=\"doc-bullet\">•</span> $text</div>"
                                 } else {
-                                    "<p$alignStyle>$text</p>"
+                                    "<p$styleStr>$text</p>"
                                 }
 
                                 if (inTableCell) {
@@ -378,6 +466,7 @@ object OpenXmlHtmlEngine {
                             } else if (!inTableCell) {
                                 sb.append("<div class=\"empty-p\"></div>")
                             }
+                            currentParagraphText.clear()
                         }
                     }
                 }
@@ -387,6 +476,10 @@ object OpenXmlHtmlEngine {
         return sb.toString()
     }
 
+    /**
+     * Parses PPTX slide XML with shape-level image extraction, tables, and rich text formatting:
+     * bold, italic, underline, strike, colors, font sizes, alignment and bullet levels.
+     */
     private fun parseSlideXml(
         stream: InputStream,
         imagesMap: Map<String, String>,
@@ -398,7 +491,20 @@ object OpenXmlHtmlEngine {
 
         var isBold = false
         var isItalic = false
-        var currentText = StringBuilder()
+        var isUnderline = false
+        var isStrike = false
+        var fontSizePt: Int? = null
+        var textColorHex: String? = null
+
+        var paragraphAlign: String? = null
+        var listLevel = 0
+
+        var inTableCell = false
+        var inParagraph = false
+        var cellShadingHex: String? = null
+
+        val currentParagraphText = StringBuilder()
+        val currentCellContent = StringBuilder()
 
         while (event != XmlPullParser.END_DOCUMENT) {
             val tagName = parser.name?.substringAfterLast(':') ?: ""
@@ -406,22 +512,90 @@ object OpenXmlHtmlEngine {
             when (event) {
                 XmlPullParser.START_TAG -> {
                     when (tagName) {
+                        "tbl" -> {
+                            sb.append("<div class=\"table-container\"><table class=\"doc-table\">")
+                        }
+                        "tr" -> {
+                            sb.append("<tr>")
+                        }
+                        "tc" -> {
+                            inTableCell = true
+                            cellShadingHex = null
+                            currentCellContent.clear()
+                        }
                         "p" -> {
-                            currentText.clear()
+                            inParagraph = true
+                            currentParagraphText.clear()
+                            paragraphAlign = null
+                            listLevel = 0
+                        }
+                        "pPr" -> {
+                            val algn = getAttributeAny(parser, "algn")?.lowercase()
+                            paragraphAlign = when (algn) {
+                                "ctr" -> "center"
+                                "r" -> "right"
+                                "just" -> "justify"
+                                else -> if (algn != null) "left" else null
+                            }
+                            val lvlStr = getAttributeAny(parser, "lvl")
+                            listLevel = lvlStr?.toIntOrNull() ?: 0
+                        }
+                        "r" -> {
+                            isBold = false
+                            isItalic = false
+                            isUnderline = false
+                            isStrike = false
+                            fontSizePt = null
+                            textColorHex = null
                         }
                         "rPr" -> {
-                            isBold = getAttributeAny(parser, "b") == "1"
-                            isItalic = getAttributeAny(parser, "i") == "1"
+                            val b = getAttributeAny(parser, "b")
+                            if (b == "1" || b == "true") isBold = true
+                            val i = getAttributeAny(parser, "i")
+                            if (i == "1" || i == "true") isItalic = true
+                            val u = getAttributeAny(parser, "u")
+                            if (!u.isNullOrBlank() && u != "none") isUnderline = true
+                            val strike = getAttributeAny(parser, "strike")
+                            if (!strike.isNullOrBlank() && strike != "noStrike") isStrike = true
+
+                            val sz = getAttributeAny(parser, "sz")?.toIntOrNull()
+                            if (sz != null && sz > 0) {
+                                fontSizePt = (sz / 100.0).roundToInt()
+                            }
+                        }
+                        "srgbClr" -> {
+                            val hex = getAttributeAny(parser, "val")
+                            if (!hex.isNullOrBlank()) {
+                                if (inTableCell && currentCellContent.isEmpty() && currentParagraphText.isEmpty()) {
+                                    cellShadingHex = "#$hex"
+                                } else {
+                                    textColorHex = "#$hex"
+                                }
+                            }
                         }
                         "t" -> {
                             val text = parser.nextText()
                             if (text.isNotEmpty()) {
                                 val escaped = escapeHtml(text)
-                                val styled = formatRun(escaped, isBold, isItalic, false, false)
-                                currentText.append(styled)
+                                val styled = formatRichRun(
+                                    text = escaped,
+                                    bold = isBold,
+                                    italic = isItalic,
+                                    underline = isUnderline,
+                                    strike = isStrike,
+                                    colorHex = textColorHex,
+                                    highlight = null,
+                                    fontSizePt = fontSizePt,
+                                    vertAlign = null
+                                )
+                                currentParagraphText.append(styled)
                             }
                         }
+                        "br" -> {
+                            currentParagraphText.append("<br/>")
+                        }
                         "blip", "imagedata" -> {
+                            // Slide-level picture shape (DrawingML <p:pic> or <v:imagedata>)
                             val embedId = getAttributeAny(parser, "embed", "r:embed", "id", "r:id", "href", "r:link")
                             if (embedId != null) {
                                 val imgName = relsMap[embedId] ?: relsMap[embedId.lowercase()]
@@ -432,7 +606,14 @@ object OpenXmlHtmlEngine {
                                 }
 
                                 if (dataUri != null) {
-                                    currentText.append("<div class=\"img-wrapper\"><img src=\"$dataUri\" alt=\"Slide Image\" /></div>")
+                                    val imgHtml = "<div class=\"img-wrapper\"><img src=\"$dataUri\" alt=\"Slide Image\" /></div>"
+                                    if (inTableCell) {
+                                        currentCellContent.append(imgHtml)
+                                    } else if (inParagraph) {
+                                        currentParagraphText.append(imgHtml)
+                                    } else {
+                                        sb.append(imgHtml)
+                                    }
                                 }
                             }
                         }
@@ -440,11 +621,39 @@ object OpenXmlHtmlEngine {
                 }
                 XmlPullParser.END_TAG -> {
                     when (tagName) {
+                        "tbl" -> {
+                            sb.append("</table></div>")
+                        }
+                        "tr" -> {
+                            sb.append("</tr>")
+                        }
+                        "tc" -> {
+                            inTableCell = false
+                            val styleAttr = if (cellShadingHex != null) " style=\"background-color: $cellShadingHex;\"" else ""
+                            val content = currentCellContent.toString().trim()
+                            val finalContent = if (content.isNotEmpty()) content else "&nbsp;"
+                            sb.append("<td$styleAttr>$finalContent</td>")
+                            currentCellContent.clear()
+                        }
                         "p" -> {
-                            val t = currentText.toString()
-                            if (t.isNotBlank() || t.contains("<img")) {
-                                sb.append("<p class=\"slide-text\">$t</p>")
+                            inParagraph = false
+                            val text = currentParagraphText.toString().trim()
+                            if (text.isNotBlank() || text.contains("<img") || text.contains("<br")) {
+                                val styles = StringBuilder()
+                                if (paragraphAlign != null) styles.append("text-align: $paragraphAlign; ")
+                                if (listLevel > 0) styles.append("padding-left: ${listLevel * 20}px; ")
+
+                                val styleAttr = if (styles.isNotEmpty()) " style=\"$styles\"" else ""
+                                val bullet = if (listLevel > 0) "<span class=\"slide-bullet\">•</span> " else ""
+                                val pHtml = "<p class=\"slide-text\"$styleAttr>$bullet$text</p>"
+
+                                if (inTableCell) {
+                                    currentCellContent.append(pHtml)
+                                } else {
+                                    sb.append(pHtml)
+                                }
                             }
+                            currentParagraphText.clear()
                         }
                     }
                 }
@@ -485,13 +694,35 @@ object OpenXmlHtmlEngine {
         return parser
     }
 
-    private fun formatRun(text: String, bold: Boolean, italic: Boolean, underline: Boolean, strike: Boolean): String {
+    private fun formatRichRun(
+        text: String,
+        bold: Boolean,
+        italic: Boolean,
+        underline: Boolean,
+        strike: Boolean,
+        colorHex: String?,
+        highlight: String?,
+        fontSizePt: Int?,
+        vertAlign: String?
+    ): String {
         var res = text
         if (bold) res = "<strong>$res</strong>"
         if (italic) res = "<em>$res</em>"
         if (underline) res = "<u>$res</u>"
         if (strike) res = "<s>$res</s>"
-        return res
+        if (vertAlign == "superscript") res = "<sup>$res</sup>"
+        if (vertAlign == "subscript") res = "<sub>$res</sub>"
+
+        val styleRules = StringBuilder()
+        if (colorHex != null) styleRules.append("color: $colorHex; ")
+        if (highlight != null) styleRules.append("background-color: $highlight; ")
+        if (fontSizePt != null && fontSizePt > 0) styleRules.append("font-size: ${fontSizePt}pt; ")
+
+        return if (styleRules.isNotEmpty()) {
+            "<span style=\"$styleRules\">$res</span>"
+        } else {
+            res
+        }
     }
 
     private fun escapeHtml(text: String): String {
@@ -556,14 +787,24 @@ object OpenXmlHtmlEngine {
             margin-bottom: 0.6em;
             line-height: 1.3;
         }
-        h1 { font-size: 1.6em; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px; }
-        h2 { font-size: 1.35em; }
-        h3 { font-size: 1.15em; }
+        h1 { font-size: 1.65em; border-bottom: 1px solid #e0e0e0; padding-bottom: 6px; }
+        h2 { font-size: 1.4em; }
+        h3 { font-size: 1.2em; }
+        h4 { font-size: 1.05em; }
         p {
             margin: 0 0 10px 0;
         }
         .empty-p {
             height: 10px;
+        }
+        .doc-list-item {
+            margin: 4px 0 6px 16px;
+            line-height: 1.5;
+        }
+        .doc-bullet {
+            color: #2196F3;
+            font-weight: bold;
+            margin-right: 6px;
         }
         .img-wrapper {
             text-align: center;
@@ -635,7 +876,7 @@ object OpenXmlHtmlEngine {
         .slide-card {
             background: #ffffff;
             border-radius: 12px;
-            padding: 20px;
+            padding: 24px;
             margin-bottom: 20px;
             box-shadow: 0 3px 12px rgba(0,0,0,0.08);
             border: 1px solid #dfe3e8;
@@ -644,7 +885,7 @@ object OpenXmlHtmlEngine {
         .slide-header {
             display: flex;
             justify-content: flex-end;
-            margin-bottom: 12px;
+            margin-bottom: 14px;
             border-bottom: 1px solid #f0f0f0;
             padding-bottom: 6px;
         }
@@ -658,11 +899,17 @@ object OpenXmlHtmlEngine {
             border: 1px solid #ffe082;
         }
         .slide-content {
-            font-size: 15px;
+            font-size: 16px;
+            line-height: 1.6;
             min-height: 120px;
         }
         .slide-text {
-            margin: 6px 0;
+            margin: 8px 0;
+        }
+        .slide-bullet {
+            color: #ff9800;
+            font-weight: bold;
+            margin-right: 6px;
         }
     """
 }

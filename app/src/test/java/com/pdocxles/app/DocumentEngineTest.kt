@@ -1,5 +1,6 @@
 package com.pdocxles.app
 
+import com.pdocxles.app.engine.openxml.OpenXmlHtmlEngine
 import com.pdocxles.app.engine.xlsx.FastExcelEngine
 import com.pdocxles.app.model.DocumentItem
 import com.pdocxles.app.model.DocumentType
@@ -84,11 +85,15 @@ class DocumentEngineTest {
                 """.trimIndent().toByteArray())
                 zos.closeEntry()
 
-                // 3. xl/sharedStrings.xml
+                // 3. xl/sharedStrings.xml with phonetic guide
                 zos.putNextEntry(ZipEntry("xl/sharedStrings.xml"))
                 zos.write("""<?xml version="1.0" encoding="UTF-8"?>
                     <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2">
-                        <si><t>Revenue</t></si>
+                        <si>
+                            <t>Revenue</t>
+                            <rPh sb="0" eb="7"><t>phonetic_garbage</t></rPh>
+                            <phoneticPr fontId="1"/>
+                        </si>
                         <si><t>Profit</t></si>
                     </sst>
                 """.trimIndent().toByteArray())
@@ -115,25 +120,118 @@ class DocumentEngineTest {
 
             val engine = FastExcelEngine(tempFile)
             val sheetsRes = engine.getSheetList()
-            if (sheetsRes.isFailure) {
-                sheetsRes.exceptionOrNull()?.printStackTrace()
-                throw sheetsRes.exceptionOrNull()!!
-            }
+            if (sheetsRes.isFailure) throw sheetsRes.exceptionOrNull()!!
             val sheets = sheetsRes.getOrNull()!!
             assertEquals(1, sheets.size)
             assertEquals("Financials", sheets[0].name)
 
             val dataRes = engine.loadSheetData(0)
-            if (dataRes.isFailure) {
-                dataRes.exceptionOrNull()?.printStackTrace()
-                throw dataRes.exceptionOrNull()!!
-            }
+            if (dataRes.isFailure) throw dataRes.exceptionOrNull()!!
             val data = dataRes.getOrNull()!!
             assertEquals(2, data.rows.size)
             assertEquals("Revenue", data.rows[0][0])
             assertEquals("150000", data.rows[0][1])
             assertEquals("Profit", data.rows[1][0])
             assertEquals("45000.5", data.rows[1][1])
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    @Test
+    fun testDocxRichTextStyles() = runBlocking {
+        val tempFile = File.createTempFile("test_sample", ".docx")
+        try {
+            ZipOutputStream(FileOutputStream(tempFile)).use { zos ->
+                // word/document.xml
+                zos.putNextEntry(ZipEntry("word/document.xml"))
+                zos.write("""<?xml version="1.0" encoding="UTF-8"?>
+                    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                        <w:body>
+                            <w:p>
+                                <w:pPr><w:jc w:val="center"/></w:pPr>
+                                <w:r>
+                                    <w:rPr>
+                                        <w:b/>
+                                        <w:color w:val="FF0000"/>
+                                        <w:sz w:val="32"/>
+                                    </w:rPr>
+                                    <w:t>Centered Red Title</w:t>
+                                </w:r>
+                            </w:p>
+                        </w:body>
+                    </w:document>
+                """.trimIndent().toByteArray())
+                zos.closeEntry()
+            }
+
+            val res = OpenXmlHtmlEngine.convertDocxToHtml(tempFile)
+            assertTrue(res.isSuccess)
+            val html = res.getOrNull()!!
+            assertTrue("Should contain bold", html.contains("<strong>"))
+            assertTrue("Should contain text-align center", html.contains("text-align: center"))
+            assertTrue("Should contain red color", html.contains("color: #FF0000"))
+            assertTrue("Should contain 16pt font size", html.contains("font-size: 16pt"))
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    @Test
+    fun testPptxImagesAndStyles() = runBlocking {
+        val tempFile = File.createTempFile("test_sample", ".pptx")
+        try {
+            ZipOutputStream(FileOutputStream(tempFile)).use { zos ->
+                // ppt/media/image1.png (mock 1x1 png bytes)
+                zos.putNextEntry(ZipEntry("ppt/media/image1.png"))
+                zos.write(byteArrayOf(137.toByte(), 80, 78, 71, 13, 10, 26, 10))
+                zos.closeEntry()
+
+                // ppt/slides/_rels/slide1.xml.rels
+                zos.putNextEntry(ZipEntry("ppt/slides/_rels/slide1.xml.rels"))
+                zos.write("""<?xml version="1.0" encoding="UTF-8"?>
+                    <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                        <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/>
+                    </Relationships>
+                """.trimIndent().toByteArray())
+                zos.closeEntry()
+
+                // ppt/slides/slide1.xml
+                zos.putNextEntry(ZipEntry("ppt/slides/slide1.xml"))
+                zos.write("""<?xml version="1.0" encoding="UTF-8"?>
+                    <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                        <p:cSld>
+                            <p:spTree>
+                                <p:sp>
+                                    <p:txBody>
+                                        <a:p>
+                                            <a:pPr algn="ctr"/>
+                                            <a:r>
+                                                <a:rPr b="1" sz="2400"><a:solidFill><a:srgbClr val="008000"/></a:solidFill></a:rPr>
+                                                <a:t>Slide Title</a:t>
+                                            </a:r>
+                                        </a:p>
+                                    </p:txBody>
+                                </p:sp>
+                                <p:pic>
+                                    <p:blipFill>
+                                        <a:blip r:embed="rId2"/>
+                                    </p:blipFill>
+                                </p:pic>
+                            </p:spTree>
+                        </p:cSld>
+                    </p:sld>
+                """.trimIndent().toByteArray())
+                zos.closeEntry()
+            }
+
+            val res = OpenXmlHtmlEngine.convertPptxToHtml(tempFile)
+            if (res.isFailure) throw res.exceptionOrNull()!!
+            val html = res.getOrNull()!!
+            assertTrue("Should contain bold", html.contains("<strong>"))
+            assertTrue("Should contain green color", html.contains("color: #008000"))
+            assertTrue("Should contain 24pt font size", html.contains("font-size: 24pt"))
+            assertTrue("Should contain embedded image data URI", html.contains("data:image/png;base64"))
         } finally {
             tempFile.delete()
         }
