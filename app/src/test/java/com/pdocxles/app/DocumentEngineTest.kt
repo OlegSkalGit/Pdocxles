@@ -259,7 +259,9 @@ class DocumentEngineTest {
                     throw err ?: Exception("Unknown error")
                 }
                 val html = res.getOrNull()!!
-                println("GreenVolt HTML length with disk cache: ${html.length}")
+                val dumpFile = File("build/greenvolt_dump.html")
+                dumpFile.writeText(html)
+                println("GreenVolt HTML dumped to ${dumpFile.absolutePath} length: ${html.length}")
                 assertTrue("HTML should be compact and not contain 15MB base64 strings", html.length < 500_000)
                 assertTrue("Should contain file:// image references", html.contains("file://"))
             } finally {

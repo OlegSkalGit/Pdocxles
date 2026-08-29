@@ -269,6 +269,7 @@ object OpenXmlHtmlEngine {
         var cellColSpan = 1
         var cellShadingHex: String? = null
         var cellTextAlign: String? = null
+        var cellVAlign: String? = null
         var cellWidthStyle: String? = null
 
         val currentGridColWidths = mutableListOf<Int>()
@@ -301,7 +302,7 @@ object OpenXmlHtmlEngine {
                     when (tagName) {
                         "tbl" -> {
                             currentGridColWidths.clear()
-                            sb.append("<div class=\"table-container\"><table class=\"doc-table\">")
+                            sb.append("<table class=\"doc-table\">")
                         }
                         "tblGrid" -> {
                             currentGridColWidths.clear()
@@ -324,6 +325,7 @@ object OpenXmlHtmlEngine {
                             cellColSpan = 1
                             cellShadingHex = null
                             cellTextAlign = null
+                            cellVAlign = null
                             cellWidthStyle = null
                             currentCellContent.clear()
                         }
@@ -344,6 +346,14 @@ object OpenXmlHtmlEngine {
                             val spanVal = getAttributeAny(parser, "val", "w:val")?.toIntOrNull()
                             if (spanVal != null && spanVal > 1) {
                                 cellColSpan = spanVal
+                            }
+                        }
+                        "vAlign" -> {
+                            val va = getAttributeAny(parser, "val", "w:val")?.lowercase()
+                            cellVAlign = when (va) {
+                                "center" -> "middle"
+                                "bottom" -> "bottom"
+                                else -> "top"
                             }
                         }
                         "shd" -> {
@@ -523,7 +533,7 @@ object OpenXmlHtmlEngine {
                             }
                         }
                         "tbl" -> {
-                            sb.append("</table></div>")
+                            sb.append("</table>")
                         }
                         "tr" -> {
                             sb.append("</tr>")
@@ -540,6 +550,9 @@ object OpenXmlHtmlEngine {
                             }
                             if (cellTextAlign != null) {
                                 styleAttr.append("text-align: $cellTextAlign; ")
+                            }
+                            if (cellVAlign != null) {
+                                styleAttr.append("vertical-align: $cellVAlign; ")
                             }
 
                             val styleStr = if (styleAttr.isNotEmpty()) " style=\"$styleAttr\"" else ""
@@ -567,6 +580,8 @@ object OpenXmlHtmlEngine {
                                     "<h$headingLevel$styleStr>$text</h$headingLevel>"
                                 } else if (isBulletList) {
                                     "<div class=\"doc-list-item\"$styleStr><span class=\"doc-bullet\">•</span> $text</div>"
+                                } else if (inTableCell) {
+                                    "<p class=\"cell-p\"$styleStr>$text</p>"
                                 } else {
                                     "<p$styleStr>$text</p>"
                                 }
@@ -937,17 +952,17 @@ object OpenXmlHtmlEngine {
         h1, h2, h3, h4, h5, h6 {
             color: #111827;
             font-weight: 700;
-            margin-top: 1.2em;
-            margin-bottom: 0.4em;
+            margin-top: 1.1em;
+            margin-bottom: 0.35em;
             line-height: 1.25;
         }
-        h1 { font-size: 1.6em; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }
-        h2 { font-size: 1.35em; }
+        h1 { font-size: 1.5em; }
+        h2 { font-size: 1.3em; }
         h3 { font-size: 1.15em; }
         h4 { font-size: 1.05em; }
         p {
             margin: 0 0 6px 0;
-            line-height: 1.25;
+            line-height: 1.35;
         }
         .empty-p {
             height: 10px;
@@ -972,28 +987,19 @@ object OpenXmlHtmlEngine {
             display: inline-block;
             border-radius: 2px;
         }
-        .table-container {
-            width: 100%;
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-            margin: 12px 0;
-            border: none;
-            background: transparent;
-            box-shadow: none;
-        }
         table.doc-table {
             border-collapse: collapse;
             width: 100%;
             min-width: 100%;
             table-layout: auto;
-            margin: 0;
-            background: #ffffff;
-            font-size: 13px;
+            margin: 12px 0;
+            font-size: 13.5px;
             line-height: 1.35;
+            background: transparent;
         }
         table.doc-table th, table.doc-table td {
-            border: 1px solid #b8bfc6;
-            padding: 6px 10px;
+            border: 1px solid #cbd5e1;
+            padding: 6px 8px;
             text-align: left;
             vertical-align: top;
             word-break: break-word;
@@ -1001,19 +1007,30 @@ object OpenXmlHtmlEngine {
             min-width: 25px;
         }
         table.doc-table th {
-            background-color: #f1f4f8;
-            font-weight: 700;
-            color: #1a1a24;
+            background-color: #f8fafc;
+            font-weight: 600;
+            color: #0f172a;
         }
-        table.doc-table tr:nth-child(even) td {
-            background-color: #fafbfc;
+        table.doc-table p.cell-p {
+            margin: 2px 0;
+            line-height: 1.35;
+        }
+        table.doc-table p.cell-p:first-child {
+            margin-top: 0;
+        }
+        table.doc-table p.cell-p:last-child {
+            margin-bottom: 0;
+        }
+        table.doc-table .img-wrapper {
+            margin: 2px 0;
         }
     """
 
     private const val DOCX_PAGE_CSS = """
         body {
-            background-color: #e9ecf0;
+            background-color: #e2e8f0;
             padding: 16px 8px;
+            margin: 0;
         }
         .docx-canvas {
             width: 100%;
@@ -1025,9 +1042,9 @@ object OpenXmlHtmlEngine {
             width: 100%;
             min-height: 1120px;
             margin: 0 auto 20px auto;
-            padding: 56px 56px;
+            padding: 48px 52px;
             box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04);
-            border: 1px solid #d4d8de;
+            border: 1px solid #cbd5e1;
             border-radius: 2px;
             box-sizing: border-box;
             word-wrap: break-word;
@@ -1051,15 +1068,27 @@ object OpenXmlHtmlEngine {
             padding: 0 6px;
             letter-spacing: 0.5px;
         }
-        @media screen and (max-width: 600px) {
+        @media screen and (max-width: 680px) {
             body {
-                padding: 8px 4px;
+                background-color: #ffffff;
+                padding: 0;
+            }
+            .docx-canvas {
+                max-width: 100%;
+                margin: 0;
+                padding: 0;
             }
             .docx-page {
-                padding: 24px 16px;
+                padding: 14px 12px;
                 min-height: auto;
-                margin-bottom: 12px;
-                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+                margin: 0;
+                box-shadow: none;
+                border: none;
+                border-radius: 0;
+            }
+            table.doc-table th, table.doc-table td {
+                padding: 5px 6px;
+                font-size: 12.5px;
             }
         }
     """
